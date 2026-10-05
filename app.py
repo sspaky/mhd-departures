@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 app = Flask(__name__)
 
-API_TOKEN = "k8Xp9m2QvL5wR7tN4yZ1jF3d"
+API_TOKEN = "<TOKEN>"
 GTFS_URL = "https://www.arcgis.com/sharing/rest/content/items/aba12fd2cbac4843bc7406151bc66106/data"
 CACHE_FILE = "/tmp/gtfs_cache.zip"
 
