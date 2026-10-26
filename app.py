@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 app = Flask(__name__)
 
-API_TOKEN = "<TOKEN>"
+API_TOKEN = "k8Xp9m2QvL5wR7tN4yZ1jF3d"
 GTFS_URL = "https://www.arcgis.com/sharing/rest/content/items/aba12fd2cbac4843bc7406151bc66106/data"
 CACHE_FILE = "/tmp/gtfs_cache.zip"
 
@@ -19,14 +19,29 @@ PARSED_CACHE = {
     "last_error": None
 }
 
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo("Europe/Bratislava")
+except Exception:
+    LOCAL_TZ = None
+
 def get_local_now():
-    # UTC+2 pre Bratislavu (letný čas)
-    return datetime.now(timezone.utc) + timedelta(hours=2)
+    # Bratislava, automaticky letný/zimný čas
+    if LOCAL_TZ:
+        return datetime.now(LOCAL_TZ)
+    # Fallback bez tzdata: EÚ letný čas od poslednej nedele v marci do poslednej nedele v októbri
+    utc = datetime.now(timezone.utc)
+    def last_sunday(month):
+        d = datetime(utc.year, month, 31, 1, tzinfo=timezone.utc)
+        return d - timedelta(days=(d.weekday() + 1) % 7)
+    hours = 2 if last_sunday(3) <= utc < last_sunday(10) else 1
+    return utc + timedelta(hours=hours)
 
 def load_and_parse_gtfs():
     now_ts = time.time()
     
-    if PARSED_CACHE["timestamp"] > 0 and (now_ts - PARSED_CACHE["timestamp"] < 43200):
+    if (PARSED_CACHE["timestamp"] > 0 and (now_ts - PARSED_CACHE["timestamp"] < 43200)
+            and PARSED_CACHE.get("date") == get_local_now().strftime("%Y%m%d")):
         return
 
     content = None
@@ -68,12 +83,18 @@ def load_and_parse_gtfs():
         weekday_name = now.strftime("%A").lower()
 
         valid_services = set()
+        weekday_services = set()
         if 'calendar.txt' in z.namelist():
             with io.TextIOWrapper(z.open('calendar.txt'), encoding='utf-8-sig') as f:
                 for row in csv.DictReader(f):
-                    if row.get('start_date', '') <= today_str <= row.get('end_date', ''):
-                        if row.get(weekday_name) == '1':
+                    if row.get(weekday_name) == '1':
+                        weekday_services.add(row['service_id'])
+                        if row.get('start_date', '') <= today_str <= row.get('end_date', ''):
                             valid_services.add(row['service_id'])
+
+        # Nový GTFS býva zverejnený pred začiatkom platnosti -> použijeme služby podľa dňa v týždni
+        if not valid_services:
+            valid_services = weekday_services
 
         if 'calendar_dates.txt' in z.namelist():
             with io.TextIOWrapper(z.open('calendar_dates.txt'), encoding='utf-8-sig') as f:
@@ -110,8 +131,16 @@ def load_and_parse_gtfs():
                         'headsign': valid_trips[trip_id]['headsign']
                     })
 
+        if not stop_times:
+            # Nekešujeme prázdny výsledok na 12 hodín, skúsime znova o 10 minút
+            PARSED_CACHE["timestamp"] = now_ts - 43200 + 600
+            PARSED_CACHE["date"] = today_str
+            PARSED_CACHE["last_error"] = f"No valid services for {today_str} in GTFS"
+            return
+
         PARSED_CACHE["stop_times"] = stop_times
         PARSED_CACHE["timestamp"] = now_ts
+        PARSED_CACHE["date"] = today_str
         PARSED_CACHE["last_error"] = None
 
     except Exception as e:
